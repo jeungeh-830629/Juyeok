@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>주역 괘뽑기 — PWA 버전</title>
+<link rel="manifest" href="manifest.json">
+<script>
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("service-worker.js");
+}
+</script>
+<style>
+:root{
+  --bg:#e5d3a1; --card:#f9f4e2; --accent:#8b5e3c;
+  color-scheme:light;
+}
+body{margin:0;font-family:Inter,system-ui,'Noto Sans KR',sans-serif;background:var(--bg);color:#2b2112;}
+.wrap{padding:18px;max-width:1100px;margin:18px auto}
+.card{background:var(--card);padding:18px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.25)}
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
+select,input[type=checkbox],button{padding:8px;border-radius:8px;border:1px solid rgba(0,0,0,0.15);background:transparent;color:inherit}
+button.primary{background:var(--accent);border:0;color:#fff;font-weight:700}
+.hex-row{display:flex;gap:16px;margin-top:14px;align-items:flex-start}
+@media(max-width:920px){.hex-row{flex-direction:column;align-items:stretch}}
+.panel{background:rgba(255,255,255,0.6);padding:14px;border-radius:10px;flex:1;min-height:220px;overflow:auto}
+.small{font-size:13px;color:#3e3220}
+.hex-canvas{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.hex-svg{padding:10px;border-radius:8px}
+.line-label{width:48px;flex-shrink:0;font-weight:700}
+.lines-list{margin-top:12px}
+.badge{display:inline-block;padding:6px 8px;border-radius:8px;background:rgba(0,0,0,0.05);font-size:13px}
+.note{margin-top:10px;color:#5a4933;font-size:13px}
+.legend{display:flex;gap:8px;align-items:center;margin-top:8px}
+.legend .sw{width:18px;height:12px;border-radius:3px;display:inline-block}
+.yang{background:#2b2112}
+.yin{background:transparent;border:2px solid #2b2112}
+.chg{box-shadow:0 0 8px 2px rgba(200,150,30,0.3);border-radius:3px}
+.hex-block{min-width:180px}
+.section-title{font-weight:700;margin-top:8px}
+.judgement-box{background:rgba(0,0,0,0.02);padding:8px;border-radius:8px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h2>주역 괘뽑기 (PWA)</h2>
+    <p class="small">iching.json, bamboo.mp3, coin.mp3 를 같은 폴더에 두세요. 설치하면 오프라인에서도 작동합니다.</p>
+
+    <div class="controls">
+      <label>방식
+        <select id="method">
+          <option value="yarrow">죽간 방식 (균등 1~64)</option>
+          <option value="coin">동전 방식 (三枚硬幣)</option>
+        </select>
+      </label>
+      <label class="small">변괘 포함 <input type="checkbox" id="includeChanging" checked></label>
+      <button id="castBtn" class="primary">뽑기</button>
+      <button id="randomBtn">랜덤 괘</button>
+    </div>
+
+    <audio id="audioBamboo" src="bamboo.mp3" preload="auto"></audio>
+    <audio id="audioCoin" src="coin.mp3" preload="auto"></audio>
+
+    <div class="hex-row" id="hexRow" style="display:none">
+      <div class="panel" id="panelLeft">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div id="hexHeader"><span id="hexNumber" style="font-size:28px;font-weight:700">—</span> <span id="hexName" style="font-size:18px"></span></div>
+            <div class="small" id="hexSub"></div>
+          </div>
+        </div>
+        <div style="margin-top:12px" id="svgArea" class="hex-canvas"></div>
+        <div class="section-title">원괘 괘사 / 상象</div>
+        <div id="judgementOriginal" class="judgement-box small"></div>
+        <div id="changedSection" style="display:none">
+          <div class="section-title">변괘 괘사 / 상象</div>
+          <div id="judgementChanged" class="judgement-box small"></div>
+        </div>
+      </div>
+      <div class="panel" id="panelRight">
+        <div class="small section-title">원괘 효사 (下1 → 上6)</div>
+        <div id="linesListOriginal" class="lines-list"></div>
+        <div id="linesChangedWrapper" style="display:none">
+          <div class="small section-title" style="margin-top:12px">변괘 효사 (下1 → 上6)</div>
+          <div id="linesListChanged" class="lines-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let iching=null;
+async function loadData(){
+  try{
+    const res=await fetch('iching.json');if(!res.ok) throw new Error();
+    iching=await res.json();
+    document.getElementById('hexRow').style.display='flex';
+  }catch(e){alert('iching.json을 불러올 수 없습니다.');}
+}
+function drawHexSVG(bits,changingLines=[]){
+  const w=160,h=240,lineHeight=28,padding=14;let svg=`<svg class="hex-svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`;
+  for(let i=0;i<6;i++){
+    const y=h-padding-(i*(lineHeight+6))-lineHeight/2;const isYang=((bits>>i)&1)===1;const isChanging=changingLines.includes(i);const stroke="#2b2112";
+    if(isYang){svg+=`<rect x="12" y="${y-7}" rx="6" width="${w-24}" height="14" fill="${stroke}" opacity="${isChanging?0.9:1}"/>`;}
+    else{const gap=22;const seg1w=(w-24-gap)/2;const seg2x=12+seg1w+gap;
+      svg+=`<rect x="12" y="${y-7}" rx="6" width="${seg1w}" height="14" fill="${stroke}"/>`;
+      svg+=`<rect x="${seg2x}" y="${y-7}" rx="6" width="${seg1w}" height="14" fill="${stroke}"/>`;}
+    if(isChanging){svg+=`<rect x="8" y="${y-11}" width="${w-16}" height="18" rx="8" fill="none" stroke="rgba(200,150,30,0.35)" stroke-width="6"/>`;}
+  }
+  return svg+'</svg>';
+}
+function castByYarrow(){return{original:Math.floor(Math.random()*64),changed:null,changingLines:[]};}
+function castByCoin(){const lines=[],changing=[];
+  for(let i=0;i<6;i++){const a=Math.random()<0.5?3:2;const b=Math.random()<0.5?3:2;const c=Math.random()<0.5?3:2;
+    const sum=a+b+c;let type=(sum===6)?'old-yin':(sum===7)?'young-yang':(sum===8)?'young-yin':'old-yang';
+    lines.push(type);if(type==='old-yin'||type==='old-yang') changing.push(i);}
+  function toBit(t){return(t==='young-yang'||t==='old-yang')?1:0;}
+  let bits=0;for(let i=0;i<6;i++) if(toBit(lines[i])) bits|=(1<<i);
+  let original=bits;let changed=null;if(changing.length>0){let cbits=bits;for(const i of changing) cbits^=(1<<i);changed=cbits;}
+  return{original,changed,changingLines:changing,coinLines:lines};}
+function renderResult(res){
+  const oidx=res.original,cidx=res.changed,changing=res.changingLines||[];const o=iching[oidx];const c=cidx!=null?iching[cidx]:null;
+  document.getElementById('hexNumber').textContent=o.hexagram_number;document.getElementById('hexName').textContent=o.hexagram_name;
+  let sub='원괘: '+o.hexagram_number+' '+o.hexagram_name;if(c) sub+=' → 변괘: '+c.hexagram_number+' '+c.hexagram_name;
+  if(changing.length>0) sub+=' | 변爻: '+changing.map(n=>n+1).join(', ');document.getElementById('hexSub').textContent=sub;
+  const svgArea=document.getElementById('svgArea');svgArea.innerHTML='';const orig=document.createElement('div');orig.className='hex-block';
+  orig.innerHTML='<div style="text-align:center;font-weight:700">원괘</div>'+drawHexSVG(res.original,changing);svgArea.appendChild(orig);
+  if(c){const chDiv=document.createElement('div');chDiv.className='hex-block';chDiv.innerHTML='<div style="text-align:center;font-weight:700">변괘</div>'+drawHexSVG(res.changed,[]);svgArea.appendChild(chDiv);}
+  const j=o.judgement||{};let jhtml='';if(j.ko) jhtml+='<div><b>한국어</b><div>'+escapeHtml(j.ko)+'</div></div>';
+  document.getElementById('judgementOriginal').innerHTML=jhtml||'<i>원괘 괘사 없음</i>';
+  if(c){document.getElementById('changedSection').style.display='block';const jc=c.judgement||{};let jhtmlc='';if(jc.ko) jhtmlc+='<div><b>한국어</b><div>'+escapeHtml(jc.ko)+'</div></div>';
+    document.getElementById('judgementChanged').innerHTML=jhtmlc||'<i>변괘 괘사 없음</i>';document.getElementById('linesChangedWrapper').style.display='block';}else{document.getElementById('changedSection').style.display='none';document.getElementById('linesChangedWrapper').style.display='none';}
+  const linesList=document.getElementById('linesListOriginal');linesList.innerHTML='';for(let i=0;i<6;i++){const ln=o.lines[i]||{};
+    const row=document.createElement('div');row.style.display='flex';row.style.gap='8px';row.style.padding='6px 0';const lbl=document.createElement('div');lbl.className='line-label';lbl.textContent='爻'+(i+1);
+    const txt=document.createElement('div');txt.className='small';txt.innerHTML=escapeHtml(ln.ko||'');if(changing.includes(i)){row.style.background='rgba(255,230,150,0.3)';row.style.borderRadius='6px';}
+    row.appendChild(lbl);row.appendChild(txt);linesList.appendChild(row);}if(c){const linesChanged=document.getElementById('linesListChanged');linesChanged.innerHTML='';
+    for(let i=0;i<6;i++){const ln=c.lines[i]||{};const row=document.createElement('div');row.style.display='flex';row.style.gap='8px';row.style.padding='6px 0';const lbl=document.createElement('div');lbl.className='line-label';lbl.textContent='爻'+(i+1);
+      const txt=document.createElement('div');txt.className='small';txt.innerHTML=escapeHtml(ln.ko||'');row.appendChild(lbl);row.appendChild(txt);linesChanged.appendChild(row);}}}
+function escapeHtml(s){if(!s) return'';return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+document.getElementById('castBtn').addEventListener('click',()=>{
+  if(!iching){alert('데이터 로드 중...');return;}const method=document.getElementById('method').value;
+  if(method==='yarrow'){const a=document.getElementById('audioBamboo');a.currentTime=0;a.play();}else{const a=document.getElementById('audioCoin');a.currentTime=0;a.play();}
+  let res=method==='coin'?castByCoin():castByYarrow();if(!document.getElementById('includeChanging').checked) res.changed=null;renderResult(res);});
+document.getElementById('randomBtn').addEventListener('click',()=>{if(!iching) return;const n=Math.floor(Math.random()*64);renderResult({original:n,changed:null,changingLines:[]});});
+loadData();
+</script>
+</body>
+</html>
